@@ -19,11 +19,9 @@ public class CombatListener implements Listener {
 
     public CombatListener(KoalaCombat plugin) { this.plugin = plugin; }
 
-    // Tag players on PvP hit
     @EventHandler(priority = EventPriority.HIGH)
     public void onDamage(EntityDamageByEntityEvent event) {
         if (!(event.getEntity() instanceof Player victim)) return;
-
         Player attacker = null;
         if (event.getDamager() instanceof Player p) {
             attacker = p;
@@ -31,14 +29,11 @@ public class CombatListener implements Listener {
             && proj.getShooter() instanceof Player p) {
             attacker = p;
         }
-
         if (attacker == null || attacker == victim) return;
-
         plugin.getCombatManager().tagPlayer(attacker);
         plugin.getCombatManager().tagPlayer(victim);
     }
 
-    // Combat log on disconnect
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
         Player player = event.getPlayer();
@@ -47,7 +42,6 @@ public class CombatListener implements Listener {
         }
     }
 
-    // Kill on rejoin if they somehow survived the disconnect (edge case)
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
@@ -57,47 +51,35 @@ public class CombatListener implements Listener {
         }
     }
 
-    // Remove from combat on death
     @EventHandler
     public void onDeath(PlayerDeathEvent event) {
         plugin.getCombatManager().endCombat(event.getEntity().getUniqueId(), false);
         plugin.getCooldownManager().clearPlayer(event.getEntity().getUniqueId());
     }
 
-    // Block commands while in combat
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onCommand(PlayerCommandPreprocessEvent event) {
         Player player = event.getPlayer();
         if (!plugin.getCombatManager().isInCombat(player.getUniqueId())) return;
-
         String command = event.getMessage().substring(1).split(" ")[0].toLowerCase();
-
-        // Check whitelist
         java.util.List<String> allowed = plugin.getConfig().getStringList("allowed-commands");
         for (String a : allowed) {
             if (command.equalsIgnoreCase(a)) return;
         }
-
-        // Block the command
         event.setCancelled(true);
         String msg = plugin.getConfig().getString("blocked-command-message", "&cYou cannot use &f/{cmd} &cwhile in combat!")
-            .replace("{cmd}", command)
-            .replace("&", "§");
+            .replace("{cmd}", command).replace("&", "§");
         player.sendMessage(msg);
     }
 
-    // Block safe zone entry while in combat
     @EventHandler
     public void onMove(PlayerMoveEvent event) {
         Player player = event.getPlayer();
         if (!plugin.getCombatManager().isInCombat(player.getUniqueId())) return;
         if (event.getTo() == null) return;
-
-        // Only check on block change
         if (event.getFrom().getBlockX() == event.getTo().getBlockX()
             && event.getFrom().getBlockY() == event.getTo().getBlockY()
             && event.getFrom().getBlockZ() == event.getTo().getBlockZ()) return;
-
         if (plugin.getSafeZoneManager().isSafeZone(event.getTo())) {
             event.setCancelled(true);
             String msg = plugin.getConfig().getString("safezone-message", "&cYou cannot enter a safe zone while in combat!")
@@ -106,9 +88,8 @@ public class CombatListener implements Listener {
         }
     }
 
-    // Block elytra use in combat
     @EventHandler
-    public void onToggleGlide(EntityToggleGlideEvent event) {
+    public void onToggleGlide(org.bukkit.event.entity.EntityToggleGlideEvent event) {
         if (!(event.getEntity() instanceof Player player)) return;
         if (!plugin.getCombatManager().isInCombat(player.getUniqueId())) return;
         if (!plugin.getConfig().getBoolean("items.elytra.enabled", true)) return;
@@ -120,7 +101,6 @@ public class CombatListener implements Listener {
         }
     }
 
-    // Block trident throw in combat
     @EventHandler
     public void onProjectileLaunch(ProjectileLaunchEvent event) {
         if (!(event.getEntity() instanceof Trident trident)) return;
@@ -133,36 +113,29 @@ public class CombatListener implements Listener {
         player.sendMessage(msg);
     }
 
-    // Item cooldowns in combat (ender pearl, totem, mace)
     @EventHandler
     public void onInteract(PlayerInteractEvent event) {
         Player player = event.getPlayer();
         if (!plugin.getCombatManager().isInCombat(player.getUniqueId())) return;
-
         ItemStack item = event.getItem();
         if (item == null) return;
-
         switch (item.getType()) {
             case ENDER_PEARL -> {
-                if (!plugin.getCooldownManager().checkAndApply("ender-pearl", player)) {
+                if (!plugin.getCooldownManager().checkAndApply("ender-pearl", player))
                     event.setCancelled(true);
-                }
             }
             case MACE -> {
-                if (!plugin.getCooldownManager().checkAndApply("mace", player)) {
+                if (!plugin.getCooldownManager().checkAndApply("mace", player))
                     event.setCancelled(true);
-                }
             }
         }
     }
 
-    // Totem cooldown on use
     @EventHandler
     public void onTotemUse(org.bukkit.event.entity.EntityResurrectEvent event) {
         if (!(event.getEntity() instanceof Player player)) return;
         if (!plugin.getCombatManager().isInCombat(player.getUniqueId())) return;
-        if (!plugin.getCooldownManager().checkAndApply("totem", player)) {
+        if (!plugin.getCooldownManager().checkAndApply("totem", player))
             event.setCancelled(true);
-        }
     }
 }
