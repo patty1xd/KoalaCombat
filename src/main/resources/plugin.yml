@@ -1,0 +1,18 @@
+name: KoalaCombat
+version: 1.0.0
+main: com.koalacombat.KoalaCombat
+api-version: '1.21'
+description: Combat tag plugin
+authors: [KoalaCombat]
+softdepend: [WorldGuard]
+
+commands:
+  koalacombat:
+    description: Reload KoalaCombat
+    usage: /koalacombat reload
+    permission: koalacombat.admin
+
+permissions:
+  koalacombat.admin:
+    description: Admin access
+    default: op
