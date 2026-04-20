@@ -1,0 +1,70 @@
+# ╔══════════════════════════════╗
+# ║     KoalaCombat Config       ║
+# ╚══════════════════════════════╝
+
+# Combat timer in seconds
+combat-duration: 15
+
+# Action bar message while in combat
+# {time} = seconds remaining
+action-bar: "&c⚔ In Combat: &f{time}s"
+
+# Message when tagged into combat
+tagged-message: "&c⚔ You are now in combat!"
+
+# Message when combat ends naturally
+combat-end-message: "&aYou are no longer in combat."
+
+# Message when trying to use a blocked command
+blocked-command-message: "&cYou cannot use &f/{cmd} &cwhile in combat!"
+
+# Message when trying to enter a safe zone
+safezone-message: "&cYou cannot enter a safe zone while in combat!"
+
+# Message shown to server when a player combat logs
+combatlog-broadcast: "&c{player} &7tried to escape combat and &cdied!"
+
+# Commands that are ALLOWED while in combat (everything else is blocked)
+allowed-commands:
+  - "msg"
+  - "tell"
+  - "w"
+  - "r"
+  - "reply"
+  - "me"
+  - "discord"
+  - "teammsg"
+
+# Safe zone settings (requires WorldGuard)
+safezones:
+  enabled: true
+  # WorldGuard regions that count as safe zones
+  # Add your region names here
+  regions:
+    - "spawn"
+    - "safezone"
+
+# Item restrictions while in combat
+items:
+  elytra:
+    enabled: true
+    message: "&cYou cannot use an Elytra while in combat!"
+  trident:
+    enabled: true
+    message: "&cYou cannot throw a Trident while in combat!"
+
+# Item cooldowns ONLY active while in combat (in seconds)
+# Set enabled: false to disable a cooldown
+cooldowns:
+  ender-pearl:
+    enabled: true
+    seconds: 15
+    message: "&cEnder Pearl is on cooldown for &f{time}s&c!"
+  totem:
+    enabled: true
+    seconds: 10
+    message: "&cTotem is on cooldown for &f{time}s&c!"
+  mace:
+    enabled: true
+    seconds: 8
+    message: "&cMace is on cooldown for &f{time}s&c!"
