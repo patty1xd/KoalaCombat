@@ -19,9 +19,11 @@ public class CombatListener implements Listener {
 
     public CombatListener(KoalaCombat plugin) { this.plugin = plugin; }
 
+    // Tag players on PvP hit + mace cooldown
     @EventHandler(priority = EventPriority.HIGH)
     public void onDamage(EntityDamageByEntityEvent event) {
         if (!(event.getEntity() instanceof Player victim)) return;
+
         Player attacker = null;
         if (event.getDamager() instanceof Player p) {
             attacker = p;
@@ -29,11 +31,23 @@ public class CombatListener implements Listener {
             && proj.getShooter() instanceof Player p) {
             attacker = p;
         }
+
         if (attacker == null || attacker == victim) return;
+
+        // Mace cooldown check — cancel the hit if on cooldown
+        ItemStack mainHand = attacker.getInventory().getItemInMainHand();
+        if (mainHand.getType() == Material.MACE) {
+            if (!plugin.getCooldownManager().checkAndApply("mace", attacker)) {
+                event.setCancelled(true);
+                return;
+            }
+        }
+
         plugin.getCombatManager().tagPlayer(attacker);
         plugin.getCombatManager().tagPlayer(victim);
     }
 
+    // Combat log on disconnect
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
         Player player = event.getPlayer();
@@ -42,21 +56,25 @@ public class CombatListener implements Listener {
         }
     }
 
+    // Kill on rejoin (shows death screen, triggers respawn)
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
         if (plugin.getCombatManager().isMarkedForDeath(player.getUniqueId())) {
             plugin.getCombatManager().clearDeathMark(player.getUniqueId());
-            player.setHealth(0);
+            // Small delay so world loads first
+            org.bukkit.Bukkit.getScheduler().runTaskLater(plugin, () -> player.setHealth(0), 10L);
         }
     }
 
+    // Remove from combat on death
     @EventHandler
     public void onDeath(PlayerDeathEvent event) {
         plugin.getCombatManager().endCombat(event.getEntity().getUniqueId(), false);
         plugin.getCooldownManager().clearPlayer(event.getEntity().getUniqueId());
     }
 
+    // Block commands while in combat
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onCommand(PlayerCommandPreprocessEvent event) {
         Player player = event.getPlayer();
@@ -72,6 +90,7 @@ public class CombatListener implements Listener {
         player.sendMessage(msg);
     }
 
+    // Block safe zone entry while in combat
     @EventHandler
     public void onMove(PlayerMoveEvent event) {
         Player player = event.getPlayer();
@@ -88,6 +107,7 @@ public class CombatListener implements Listener {
         }
     }
 
+    // Stop gliding if tagged (also prevent re-gliding)
     @EventHandler
     public void onToggleGlide(org.bukkit.event.entity.EntityToggleGlideEvent event) {
         if (!(event.getEntity() instanceof Player player)) return;
@@ -101,6 +121,7 @@ public class CombatListener implements Listener {
         }
     }
 
+    // Block trident throw in combat
     @EventHandler
     public void onProjectileLaunch(ProjectileLaunchEvent event) {
         if (!(event.getEntity() instanceof Trident trident)) return;
@@ -113,29 +134,27 @@ public class CombatListener implements Listener {
         player.sendMessage(msg);
     }
 
+    // Ender pearl cooldown
     @EventHandler
     public void onInteract(PlayerInteractEvent event) {
         Player player = event.getPlayer();
         if (!plugin.getCombatManager().isInCombat(player.getUniqueId())) return;
         ItemStack item = event.getItem();
         if (item == null) return;
-        switch (item.getType()) {
-            case ENDER_PEARL -> {
-                if (!plugin.getCooldownManager().checkAndApply("ender-pearl", player))
-                    event.setCancelled(true);
-            }
-            case MACE -> {
-                if (!plugin.getCooldownManager().checkAndApply("mace", player))
-                    event.setCancelled(true);
+        if (item.getType() == Material.ENDER_PEARL) {
+            if (!plugin.getCooldownManager().checkAndApply("ender-pearl", player)) {
+                event.setCancelled(true);
             }
         }
     }
 
+    // Totem cooldown on use
     @EventHandler
     public void onTotemUse(org.bukkit.event.entity.EntityResurrectEvent event) {
         if (!(event.getEntity() instanceof Player player)) return;
         if (!plugin.getCombatManager().isInCombat(player.getUniqueId())) return;
-        if (!plugin.getCooldownManager().checkAndApply("totem", player))
+        if (!plugin.getCooldownManager().checkAndApply("totem", player)) {
             event.setCancelled(true);
+        }
     }
 }
