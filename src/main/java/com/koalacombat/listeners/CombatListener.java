@@ -1,7 +1,9 @@
 package com.koalacombat.listeners;
 
 import com.koalacombat.KoalaCombat;
+import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.Particle;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Trident;
 import org.bukkit.event.EventHandler;
@@ -19,7 +21,7 @@ public class CombatListener implements Listener {
 
     public CombatListener(KoalaCombat plugin) { this.plugin = plugin; }
 
-    // Tag players on PvP hit + mace cooldown
+    // Tag players on PvP hit — skip if attacker is in safe zone
     @EventHandler(priority = EventPriority.HIGH)
     public void onDamage(EntityDamageByEntityEvent event) {
         if (!(event.getEntity() instanceof Player victim)) return;
@@ -34,12 +36,22 @@ public class CombatListener implements Listener {
 
         if (attacker == null || attacker == victim) return;
 
-        // Mace cooldown check — cancel the hit if on cooldown
+        // Don't tag if attacker is in a safe zone
+        if (plugin.getSafeZoneManager().isSafeZone(attacker.getLocation())) return;
+        // Don't tag if victim is in a safe zone
+        if (plugin.getSafeZoneManager().isSafeZone(victim.getLocation())) return;
+
+        // Mace cooldown check
         ItemStack mainHand = attacker.getInventory().getItemInMainHand();
         if (mainHand.getType() == Material.MACE) {
             if (!plugin.getCooldownManager().checkAndApply("mace", attacker)) {
                 event.setCancelled(true);
                 return;
+            }
+            // Apply visual hotbar cooldown using Bukkit API
+            if (plugin.getConfig().getBoolean("cooldowns.mace.enabled", true)) {
+                int seconds = plugin.getConfig().getInt("cooldowns.mace.seconds", 8);
+                attacker.setCooldown(Material.MACE, seconds * 20);
             }
         }
 
@@ -47,23 +59,18 @@ public class CombatListener implements Listener {
         plugin.getCombatManager().tagPlayer(victim);
     }
 
-    // Combat log on disconnect
-    @EventHandler
+    // Detect kicks/bans so we don't kill them
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onKick(PlayerKickEvent event) {
+        plugin.getCombatManager().markKicked(event.getPlayer().getUniqueId());
+    }
+
+    // Combat log — fire BEFORE the player fully disconnects
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onQuit(PlayerQuitEvent event) {
         Player player = event.getPlayer();
         if (plugin.getCombatManager().isInCombat(player.getUniqueId())) {
             plugin.getCombatManager().handleCombatLog(player);
-        }
-    }
-
-    // Kill on rejoin (shows death screen, triggers respawn)
-    @EventHandler
-    public void onJoin(PlayerJoinEvent event) {
-        Player player = event.getPlayer();
-        if (plugin.getCombatManager().isMarkedForDeath(player.getUniqueId())) {
-            plugin.getCombatManager().clearDeathMark(player.getUniqueId());
-            // Small delay so world loads first
-            org.bukkit.Bukkit.getScheduler().runTaskLater(plugin, () -> player.setHealth(0), 10L);
         }
     }
 
@@ -74,23 +81,30 @@ public class CombatListener implements Listener {
         plugin.getCooldownManager().clearPlayer(event.getEntity().getUniqueId());
     }
 
-    // Block commands while in combat
+    // Block commands while in combat — OP bypass allowed
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onCommand(PlayerCommandPreprocessEvent event) {
         Player player = event.getPlayer();
         if (!plugin.getCombatManager().isInCombat(player.getUniqueId())) return;
+
+        // OPs bypass command blocking
+        if (player.isOp()) return;
+
         String command = event.getMessage().substring(1).split(" ")[0].toLowerCase();
+
         java.util.List<String> allowed = plugin.getConfig().getStringList("allowed-commands");
         for (String a : allowed) {
             if (command.equalsIgnoreCase(a)) return;
         }
+
         event.setCancelled(true);
-        String msg = plugin.getConfig().getString("blocked-command-message", "&cYou cannot use &f/{cmd} &cwhile in combat!")
+        String msg = plugin.getConfig().getString("blocked-command-message",
+            "&cYou cannot use &f/{cmd} &cwhile in combat!")
             .replace("{cmd}", command).replace("&", "§");
         player.sendMessage(msg);
     }
 
-    // Block safe zone entry while in combat
+    // Block safe zone entry — show red barrier particles on border
     @EventHandler
     public void onMove(PlayerMoveEvent event) {
         Player player = event.getPlayer();
@@ -99,15 +113,30 @@ public class CombatListener implements Listener {
         if (event.getFrom().getBlockX() == event.getTo().getBlockX()
             && event.getFrom().getBlockY() == event.getTo().getBlockY()
             && event.getFrom().getBlockZ() == event.getTo().getBlockZ()) return;
+
         if (plugin.getSafeZoneManager().isSafeZone(event.getTo())) {
             event.setCancelled(true);
-            String msg = plugin.getConfig().getString("safezone-message", "&cYou cannot enter a safe zone while in combat!")
+            String msg = plugin.getConfig().getString("safezone-message",
+                "&cYou cannot enter a safe zone while in combat!")
                 .replace("&", "§");
             player.sendMessage(msg);
+            // Show red barrier particles at boundary
+            showBarrierParticles(player, event.getTo());
         }
     }
 
-    // Stop gliding if tagged (also prevent re-gliding)
+    private void showBarrierParticles(Player player, Location loc) {
+        // Show red barrier block particles in a wall pattern
+        for (double x = -1.5; x <= 1.5; x += 0.5) {
+            for (double y = 0; y <= 2; y += 0.5) {
+                Location particleLoc = loc.clone().add(x, y, 0);
+                player.spawnParticle(Particle.BLOCK, particleLoc, 1,
+                    Material.BARRIER.createBlockData());
+            }
+        }
+    }
+
+    // Block elytra in combat
     @EventHandler
     public void onToggleGlide(org.bukkit.event.entity.EntityToggleGlideEvent event) {
         if (!(event.getEntity() instanceof Player player)) return;
@@ -115,8 +144,8 @@ public class CombatListener implements Listener {
         if (!plugin.getConfig().getBoolean("items.elytra.enabled", true)) return;
         if (event.isGliding()) {
             event.setCancelled(true);
-            String msg = plugin.getConfig().getString("items.elytra.message", "&cYou cannot use an Elytra while in combat!")
-                .replace("&", "§");
+            String msg = plugin.getConfig().getString("items.elytra.message",
+                "&cYou cannot use an Elytra while in combat!").replace("&", "§");
             player.sendMessage(msg);
         }
     }
@@ -129,12 +158,12 @@ public class CombatListener implements Listener {
         if (!plugin.getCombatManager().isInCombat(player.getUniqueId())) return;
         if (!plugin.getConfig().getBoolean("items.trident.enabled", true)) return;
         event.setCancelled(true);
-        String msg = plugin.getConfig().getString("items.trident.message", "&cYou cannot throw a Trident while in combat!")
-            .replace("&", "§");
+        String msg = plugin.getConfig().getString("items.trident.message",
+            "&cYou cannot throw a Trident while in combat!").replace("&", "§");
         player.sendMessage(msg);
     }
 
-    // Ender pearl cooldown
+    // Ender pearl cooldown + visual
     @EventHandler
     public void onInteract(PlayerInteractEvent event) {
         Player player = event.getPlayer();
@@ -144,17 +173,28 @@ public class CombatListener implements Listener {
         if (item.getType() == Material.ENDER_PEARL) {
             if (!plugin.getCooldownManager().checkAndApply("ender-pearl", player)) {
                 event.setCancelled(true);
+            } else {
+                // Apply visual cooldown
+                if (plugin.getConfig().getBoolean("cooldowns.ender-pearl.enabled", true)) {
+                    int seconds = plugin.getConfig().getInt("cooldowns.ender-pearl.seconds", 15);
+                    player.setCooldown(Material.ENDER_PEARL, seconds * 20);
+                }
             }
         }
     }
 
-    // Totem cooldown on use
+    // Totem cooldown + visual
     @EventHandler
     public void onTotemUse(org.bukkit.event.entity.EntityResurrectEvent event) {
         if (!(event.getEntity() instanceof Player player)) return;
         if (!plugin.getCombatManager().isInCombat(player.getUniqueId())) return;
         if (!plugin.getCooldownManager().checkAndApply("totem", player)) {
             event.setCancelled(true);
+        } else {
+            if (plugin.getConfig().getBoolean("cooldowns.totem.enabled", true)) {
+                int seconds = plugin.getConfig().getInt("cooldowns.totem.seconds", 10);
+                player.setCooldown(Material.TOTEM_OF_UNDYING, seconds * 20);
+            }
         }
     }
 }
