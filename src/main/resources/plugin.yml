@@ -4,7 +4,7 @@ main: com.koalacombat.KoalaCombat
 api-version: '1.21'
 description: Combat tag plugin
 authors: [KoalaCombat]
-softdepend: [WorldGuard]
+softdepend: [WorldGuard, TeamsPlugin]
 
 commands:
   koalacombat:
