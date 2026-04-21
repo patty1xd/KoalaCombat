@@ -3,9 +3,7 @@ package com.koalacombat.managers;
 import com.koalacombat.KoalaCombat;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.bukkit.Bukkit;
-import org.bukkit.Location;
 import org.bukkit.entity.Player;
-import org.bukkit.inventory.ItemStack;
 
 import java.util.*;
 
@@ -14,7 +12,8 @@ public class CombatManager {
     private final KoalaCombat plugin;
     private final Map<UUID, Long> combatExpiry = new HashMap<>();
     private final Map<UUID, Integer> actionBarTasks = new HashMap<>();
-    private final Set<UUID> markedForDeath = new HashSet<>();
+    // Players who were kicked/banned — should NOT die
+    private final Set<UUID> kickedPlayers = new HashSet<>();
 
     public CombatManager(KoalaCombat plugin) {
         this.plugin = plugin;
@@ -42,10 +41,8 @@ public class CombatManager {
         boolean wasInCombat = isInCombat(player.getUniqueId());
         combatExpiry.put(player.getUniqueId(), expiry);
 
-        // If player is gliding with elytra, stop them immediately
-        if (player.isGliding()) {
-            player.setGliding(false);
-        }
+        // Stop gliding immediately
+        if (player.isGliding()) player.setGliding(false);
 
         if (!wasInCombat) {
             String msg = plugin.getConfig().getString("tagged-message", "&c⚔ You are now in combat!")
@@ -69,10 +66,35 @@ public class CombatManager {
         }
     }
 
+    public void markKicked(UUID uuid) {
+        kickedPlayers.add(uuid);
+    }
+
+    public boolean isKicked(UUID uuid) {
+        return kickedPlayers.contains(uuid);
+    }
+
+    public void clearKicked(UUID uuid) {
+        kickedPlayers.remove(uuid);
+    }
+
+    /**
+     * Called when a player disconnects voluntarily while in combat.
+     * Kills them immediately on the same tick using setHealth(0).
+     * This triggers normal death — drops items per server rules, shows death screen on rejoin.
+     */
     public void handleCombatLog(Player player) {
         if (!isInCombat(player.getUniqueId())) return;
 
-        String broadcast = plugin.getConfig().getString("combatlog-broadcast", "&c{player} &7tried to escape combat and &cdied!")
+        // Don't kill if they were kicked/banned
+        if (isKicked(player.getUniqueId())) {
+            clearKicked(player.getUniqueId());
+            endCombat(player.getUniqueId(), false);
+            return;
+        }
+
+        String broadcast = plugin.getConfig().getString("combatlog-broadcast",
+            "&c{player} &7tried to escape combat and &cdied!")
             .replace("{player}", player.getName())
             .replace("&", "§");
         Bukkit.broadcastMessage(broadcast);
@@ -80,30 +102,10 @@ public class CombatManager {
         combatExpiry.remove(player.getUniqueId());
         stopActionBar(player.getUniqueId());
 
-        // Drop all inventory items at their location
-        Location loc = player.getLocation();
-        for (ItemStack item : player.getInventory().getContents()) {
-            if (item != null) loc.getWorld().dropItemNaturally(loc, item);
-        }
-        for (ItemStack item : player.getInventory().getArmorContents()) {
-            if (item != null) loc.getWorld().dropItemNaturally(loc, item);
-        }
-        ItemStack offhand = player.getInventory().getItemInOffHand();
-        if (offhand != null && offhand.getType() != org.bukkit.Material.AIR) {
-            loc.getWorld().dropItemNaturally(loc, offhand);
-        }
-
-        // Clear inventory
-        player.getInventory().clear();
-        player.getInventory().setArmorContents(new ItemStack[4]);
-        player.getInventory().setItemInOffHand(null);
-
-        // Mark for death on rejoin (sets health to 0 so death screen shows)
-        markedForDeath.add(player.getUniqueId());
+        // Kill immediately — this triggers vanilla death which follows server keepInventory rules
+        // setHealth(0) on the same tick as disconnect causes proper death with drops
+        player.setHealth(0);
     }
-
-    public boolean isMarkedForDeath(UUID uuid) { return markedForDeath.contains(uuid); }
-    public void clearDeathMark(UUID uuid) { markedForDeath.remove(uuid); }
 
     private void startActionBar(Player player) {
         stopActionBar(player.getUniqueId());
