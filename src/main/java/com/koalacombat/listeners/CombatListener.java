@@ -35,37 +35,43 @@ public class CombatListener implements Listener {
         }
         if (attacker == null || attacker == victim) return;
 
-        // Don't tag if either is in a safe zone
+        // Don't tag if either is in safe zone
         if (plugin.getSafeZoneManager().isSafeZone(attacker.getLocation())) return;
         if (plugin.getSafeZoneManager().isSafeZone(victim.getLocation())) return;
 
-        // Don't tag teammates or allies (TeamsPlugin integration)
+        // Don't tag teammates or allies
         if (areTeammates(attacker, victim)) return;
 
-        // Mace cooldown check
+        // Mace cooldown — check BEFORE tagging so first hit always lands
+        // Then apply cooldown AFTER so subsequent hits are blocked
         ItemStack mainHand = attacker.getInventory().getItemInMainHand();
         if (mainHand.getType() == Material.MACE) {
-            if (!plugin.getCooldownManager().checkAndApply("mace", attacker)) {
+            if (plugin.getCooldownManager().isOnCooldown("mace", attacker.getUniqueId())) {
+                // Already on cooldown from a previous hit — block it
+                String msg = plugin.getConfig().getString("cooldowns.mace.message", "&cMace is on cooldown!")
+                    .replace("{time}", String.valueOf(plugin.getCooldownManager().getRemainingSeconds("mace", attacker.getUniqueId())))
+                    .replace("&", "§");
+                attacker.sendMessage(msg);
                 event.setCancelled(true);
                 return;
             }
+            // First or valid hit — let it through, then set cooldown
             if (plugin.getConfig().getBoolean("cooldowns.mace.enabled", true)) {
+                plugin.getCooldownManager().setCooldown("mace", attacker.getUniqueId());
                 int seconds = plugin.getConfig().getInt("cooldowns.mace.seconds", 8);
                 attacker.setCooldown(Material.MACE, seconds * 20);
             }
         }
 
-        plugin.getCombatManager().tagPlayer(attacker);
-        plugin.getCombatManager().tagPlayer(victim);
+        // Tag both players
+        plugin.getCombatManager().tagPlayers(attacker, victim);
     }
 
-    // Detect kicks/bans
     @EventHandler(priority = EventPriority.MONITOR)
     public void onKick(PlayerKickEvent event) {
         plugin.getCombatManager().markKicked(event.getPlayer().getUniqueId());
     }
 
-    // Combat log
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onQuit(PlayerQuitEvent event) {
         Player player = event.getPlayer();
@@ -74,29 +80,36 @@ public class CombatListener implements Listener {
         }
     }
 
+    // Death ends BOTH players' combat
     @EventHandler
     public void onDeath(PlayerDeathEvent event) {
-        plugin.getCombatManager().endCombat(event.getEntity().getUniqueId(), false);
+        plugin.getCombatManager().handleDeath(event.getEntity().getUniqueId());
         plugin.getCooldownManager().clearPlayer(event.getEntity().getUniqueId());
     }
 
-    // Block commands — OP bypass
+    // Blocklist approach — block specific commands, allow everything else
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onCommand(PlayerCommandPreprocessEvent event) {
         Player player = event.getPlayer();
         if (!plugin.getCombatManager().isInCombat(player.getUniqueId())) return;
         if (player.isOp()) return;
 
-        String command = event.getMessage().substring(1).split(" ")[0].toLowerCase();
-        java.util.List<String> allowed = plugin.getConfig().getStringList("allowed-commands");
-        for (String a : allowed) {
-            if (command.equalsIgnoreCase(a)) return;
+        // Get the full command (e.g. "team home" from "/team home")
+        String fullCommand = event.getMessage().substring(1).toLowerCase().trim();
+        String firstWord = fullCommand.split(" ")[0];
+
+        java.util.List<String> blocked = plugin.getConfig().getStringList("blocked-commands");
+        for (String b : blocked) {
+            // Match either first word or full command (for "team home" etc)
+            if (firstWord.equalsIgnoreCase(b) || fullCommand.startsWith(b.toLowerCase())) {
+                event.setCancelled(true);
+                String msg = plugin.getConfig().getString("blocked-command-message",
+                    "&cYou cannot use &f/{cmd} &cwhile in combat!")
+                    .replace("{cmd}", firstWord).replace("&", "§");
+                player.sendMessage(msg);
+                return;
+            }
         }
-        event.setCancelled(true);
-        String msg = plugin.getConfig().getString("blocked-command-message",
-            "&cYou cannot use &f/{cmd} &cwhile in combat!")
-            .replace("{cmd}", command).replace("&", "§");
-        player.sendMessage(msg);
     }
 
     // Block safe zone entry + barrier particles
@@ -120,19 +133,15 @@ public class CombatListener implements Listener {
 
     private void showBarrierParticles(Player player, Location loc) {
         try {
-            // Use DUST particles in red color — works reliably in all 1.21 versions
-            Particle.DustOptions dust = new Particle.DustOptions(
-                org.bukkit.Color.RED, 1.5f);
+            Particle.DustOptions dust = new Particle.DustOptions(org.bukkit.Color.RED, 1.5f);
             for (double x = -1.5; x <= 1.5; x += 0.4) {
                 for (double y = 0; y <= 2.5; y += 0.4) {
-                    Location particleLoc = loc.clone().add(x, y, 0);
-                    player.spawnParticle(Particle.DUST, particleLoc, 1, 0, 0, 0, 0, dust);
+                    player.spawnParticle(Particle.DUST, loc.clone().add(x, y, 0), 1, 0, 0, 0, 0, dust);
                 }
             }
         } catch (Exception ignored) {}
     }
 
-    // Block elytra in combat
     @EventHandler
     public void onToggleGlide(org.bukkit.event.entity.EntityToggleGlideEvent event) {
         if (!(event.getEntity() instanceof Player player)) return;
@@ -140,13 +149,11 @@ public class CombatListener implements Listener {
         if (!plugin.getConfig().getBoolean("items.elytra.enabled", true)) return;
         if (event.isGliding()) {
             event.setCancelled(true);
-            String msg = plugin.getConfig().getString("items.elytra.message",
-                "&cYou cannot use an Elytra while in combat!").replace("&", "§");
-            player.sendMessage(msg);
+            player.sendMessage(plugin.getConfig().getString("items.elytra.message",
+                "&cYou cannot use an Elytra while in combat!").replace("&", "§"));
         }
     }
 
-    // Block trident throw AND riptide in combat
     @EventHandler
     public void onProjectileLaunch(ProjectileLaunchEvent event) {
         if (!(event.getEntity() instanceof Trident trident)) return;
@@ -154,15 +161,8 @@ public class CombatListener implements Listener {
         if (!plugin.getCombatManager().isInCombat(player.getUniqueId())) return;
         if (!plugin.getConfig().getBoolean("items.trident.enabled", true)) return;
         event.setCancelled(true);
-        String msg = plugin.getConfig().getString("items.trident.message",
-            "&cYou cannot throw a Trident while in combat!").replace("&", "§");
-        player.sendMessage(msg);
-    }
-
-    // Block riptide specifically — fires when player uses riptide to launch themselves
-    @EventHandler(priority = EventPriority.HIGH)
-    public void onPlayerItemHeld(PlayerItemHeldEvent event) {
-        // Not needed for riptide — handled below via interact
+        player.sendMessage(plugin.getConfig().getString("items.trident.message",
+            "&cYou cannot use a Trident while in combat!").replace("&", "§"));
     }
 
     @EventHandler(priority = EventPriority.HIGH)
@@ -174,57 +174,56 @@ public class CombatListener implements Listener {
 
         switch (item.getType()) {
             case ENDER_PEARL -> {
-                if (!plugin.getCooldownManager().checkAndApply("ender-pearl", player)) {
+                if (plugin.getCooldownManager().isOnCooldown("ender-pearl", player.getUniqueId())) {
+                    String msg = plugin.getConfig().getString("cooldowns.ender-pearl.message", "&cOn cooldown!")
+                        .replace("{time}", String.valueOf(plugin.getCooldownManager().getRemainingSeconds("ender-pearl", player.getUniqueId())))
+                        .replace("&", "§");
+                    player.sendMessage(msg);
                     event.setCancelled(true);
                 } else if (plugin.getConfig().getBoolean("cooldowns.ender-pearl.enabled", true)) {
+                    plugin.getCooldownManager().setCooldown("ender-pearl", player.getUniqueId());
                     int seconds = plugin.getConfig().getInt("cooldowns.ender-pearl.seconds", 15);
                     player.setCooldown(Material.ENDER_PEARL, seconds * 20);
                 }
             }
             case TRIDENT -> {
-                // Block riptide — check if trident has riptide enchant
                 if (!plugin.getConfig().getBoolean("items.trident.enabled", true)) break;
                 ItemMeta meta = item.getItemMeta();
                 if (meta != null && meta.hasEnchant(org.bukkit.enchantments.Enchantment.RIPTIDE)) {
                     event.setCancelled(true);
-                    String msg = plugin.getConfig().getString("items.trident.message",
-                        "&cYou cannot use a Trident while in combat!").replace("&", "§");
-                    player.sendMessage(msg);
+                    player.sendMessage(plugin.getConfig().getString("items.trident.message",
+                        "&cYou cannot use a Trident while in combat!").replace("&", "§"));
                 }
             }
         }
     }
 
-    // Totem cooldown
     @EventHandler
     public void onTotemUse(org.bukkit.event.entity.EntityResurrectEvent event) {
         if (!(event.getEntity() instanceof Player player)) return;
         if (!plugin.getCombatManager().isInCombat(player.getUniqueId())) return;
-        if (!plugin.getCooldownManager().checkAndApply("totem", player)) {
+        if (plugin.getCooldownManager().isOnCooldown("totem", player.getUniqueId())) {
+            String msg = plugin.getConfig().getString("cooldowns.totem.message", "&cTotem on cooldown!")
+                .replace("{time}", String.valueOf(plugin.getCooldownManager().getRemainingSeconds("totem", player.getUniqueId())))
+                .replace("&", "§");
+            player.sendMessage(msg);
             event.setCancelled(true);
         } else if (plugin.getConfig().getBoolean("cooldowns.totem.enabled", true)) {
+            plugin.getCooldownManager().setCooldown("totem", player.getUniqueId());
             int seconds = plugin.getConfig().getInt("cooldowns.totem.seconds", 10);
             player.setCooldown(Material.TOTEM_OF_UNDYING, seconds * 20);
         }
     }
 
-    // Check if two players are teammates or allies via TeamsPlugin (reflection - no compile dependency)
     private boolean areTeammates(Player a, Player b) {
         try {
             org.bukkit.plugin.Plugin teamsPlugin = org.bukkit.Bukkit.getPluginManager().getPlugin("TeamsPlugin");
             if (teamsPlugin == null) return false;
-
-            // Use reflection to avoid compile dependency
             Object teamManager = teamsPlugin.getClass().getMethod("getTeamManager").invoke(teamsPlugin);
-            Object teamA = teamManager.getClass().getMethod("getPlayerTeam", java.util.UUID.class)
-                .invoke(teamManager, a.getUniqueId());
-            Object teamB = teamManager.getClass().getMethod("getPlayerTeam", java.util.UUID.class)
-                .invoke(teamManager, b.getUniqueId());
-
+            Object teamA = teamManager.getClass().getMethod("getPlayerTeam", java.util.UUID.class).invoke(teamManager, a.getUniqueId());
+            Object teamB = teamManager.getClass().getMethod("getPlayerTeam", java.util.UUID.class).invoke(teamManager, b.getUniqueId());
             if (teamA == null || teamB == null) return false;
             if (teamA == teamB) return true;
-
-            // Check allies
             Boolean allied = (Boolean) teamManager.getClass()
                 .getMethod("areAllies", teamA.getClass().getSuperclass(), teamB.getClass().getSuperclass())
                 .invoke(teamManager, teamA, teamB);
