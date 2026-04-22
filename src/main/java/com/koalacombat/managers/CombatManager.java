@@ -12,7 +12,8 @@ public class CombatManager {
     private final KoalaCombat plugin;
     private final Map<UUID, Long> combatExpiry = new HashMap<>();
     private final Map<UUID, Integer> actionBarTasks = new HashMap<>();
-    // Players who were kicked/banned — should NOT die
+    // Track who is fighting who so we can end both combats on death
+    private final Map<UUID, UUID> combatOpponent = new HashMap<>();
     private final Set<UUID> kickedPlayers = new HashSet<>();
 
     public CombatManager(KoalaCombat plugin) {
@@ -35,13 +36,20 @@ public class CombatManager {
         return (int) Math.max(0, (expiry - System.currentTimeMillis()) / 1000);
     }
 
+    public void tagPlayers(Player attacker, Player victim) {
+        tagPlayer(attacker);
+        tagPlayer(victim);
+        // Track opponents
+        combatOpponent.put(attacker.getUniqueId(), victim.getUniqueId());
+        combatOpponent.put(victim.getUniqueId(), attacker.getUniqueId());
+    }
+
     public void tagPlayer(Player player) {
         int duration = plugin.getConfig().getInt("combat-duration", 15);
         long expiry = System.currentTimeMillis() + (duration * 1000L);
         boolean wasInCombat = isInCombat(player.getUniqueId());
         combatExpiry.put(player.getUniqueId(), expiry);
 
-        // Stop gliding immediately
         if (player.isGliding()) player.setGliding(false);
 
         if (!wasInCombat) {
@@ -55,6 +63,8 @@ public class CombatManager {
     public void endCombat(UUID uuid, boolean natural) {
         combatExpiry.remove(uuid);
         stopActionBar(uuid);
+        combatOpponent.remove(uuid);
+
         if (natural) {
             Player player = Bukkit.getPlayer(uuid);
             if (player != null) {
@@ -66,44 +76,45 @@ public class CombatManager {
         }
     }
 
-    public void markKicked(UUID uuid) {
-        kickedPlayers.add(uuid);
+    // Called when a player dies — also ends their opponent's combat
+    public void handleDeath(UUID deadPlayer) {
+        // End the dead player's combat
+        endCombat(deadPlayer, false);
+
+        // End the opponent's combat too
+        UUID opponent = combatOpponent.get(deadPlayer);
+        if (opponent != null) {
+            endCombat(opponent, true);
+        }
     }
 
-    public boolean isKicked(UUID uuid) {
-        return kickedPlayers.contains(uuid);
-    }
+    public void markKicked(UUID uuid) { kickedPlayers.add(uuid); }
+    public boolean isKicked(UUID uuid) { return kickedPlayers.contains(uuid); }
+    public void clearKicked(UUID uuid) { kickedPlayers.remove(uuid); }
 
-    public void clearKicked(UUID uuid) {
-        kickedPlayers.remove(uuid);
-    }
-
-    /**
-     * Called when a player disconnects voluntarily while in combat.
-     * Kills them immediately on the same tick using setHealth(0).
-     * This triggers normal death — drops items per server rules, shows death screen on rejoin.
-     */
     public void handleCombatLog(Player player) {
         if (!isInCombat(player.getUniqueId())) return;
-
-        // Don't kill if they were kicked/banned
         if (isKicked(player.getUniqueId())) {
             clearKicked(player.getUniqueId());
             endCombat(player.getUniqueId(), false);
             return;
         }
-
         String broadcast = plugin.getConfig().getString("combatlog-broadcast",
             "&c{player} &7tried to escape combat and &cdied!")
             .replace("{player}", player.getName())
             .replace("&", "§");
         Bukkit.broadcastMessage(broadcast);
 
+        // End opponent's combat too
+        UUID opponent = combatOpponent.get(player.getUniqueId());
         combatExpiry.remove(player.getUniqueId());
         stopActionBar(player.getUniqueId());
+        combatOpponent.remove(player.getUniqueId());
 
-        // Kill immediately — this triggers vanilla death which follows server keepInventory rules
-        // setHealth(0) on the same tick as disconnect causes proper death with drops
+        if (opponent != null) {
+            endCombat(opponent, true);
+        }
+
         player.setHealth(0);
     }
 
