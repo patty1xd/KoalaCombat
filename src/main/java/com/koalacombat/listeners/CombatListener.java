@@ -216,20 +216,68 @@ public class CombatListener implements Listener {
     }
 
     private boolean areTeammates(Player a, Player b) {
+        // --- TeamsPlugin check ---
         try {
             org.bukkit.plugin.Plugin teamsPlugin = org.bukkit.Bukkit.getPluginManager().getPlugin("TeamsPlugin");
-            if (teamsPlugin == null) return false;
-            Object teamManager = teamsPlugin.getClass().getMethod("getTeamManager").invoke(teamsPlugin);
-            Object teamA = teamManager.getClass().getMethod("getPlayerTeam", java.util.UUID.class).invoke(teamManager, a.getUniqueId());
-            Object teamB = teamManager.getClass().getMethod("getPlayerTeam", java.util.UUID.class).invoke(teamManager, b.getUniqueId());
-            if (teamA == null || teamB == null) return false;
-            if (teamA == teamB) return true;
-            Boolean allied = (Boolean) teamManager.getClass()
-                .getMethod("areAllies", teamA.getClass().getSuperclass(), teamB.getClass().getSuperclass())
-                .invoke(teamManager, teamA, teamB);
-            return allied != null && allied;
-        } catch (Exception e) {
-            return false;
-        }
+            if (teamsPlugin != null) {
+                Object teamManager = teamsPlugin.getClass().getMethod("getTeamManager").invoke(teamsPlugin);
+                Object teamA = teamManager.getClass().getMethod("getPlayerTeam", java.util.UUID.class).invoke(teamManager, a.getUniqueId());
+                Object teamB = teamManager.getClass().getMethod("getPlayerTeam", java.util.UUID.class).invoke(teamManager, b.getUniqueId());
+                if (teamA != null && teamB != null) {
+                    if (teamA == teamB) return true;
+                    Boolean allied = (Boolean) teamManager.getClass()
+                        .getMethod("areAllies", teamA.getClass().getSuperclass(), teamB.getClass().getSuperclass())
+                        .invoke(teamManager, teamA, teamB);
+                    if (allied != null && allied) return true;
+                }
+            }
+        } catch (Exception ignored) {}
+
+        // --- Towny check ---
+        try {
+            org.bukkit.plugin.Plugin townyPlugin = org.bukkit.Bukkit.getPluginManager().getPlugin("Towny");
+            if (townyPlugin == null) return false;
+
+            Class<?> townyAPIClass = Class.forName("com.palmergames.bukkit.towny.TownyAPI");
+            Object townyAPI = townyAPIClass.getMethod("getInstance").invoke(null);
+
+            Object residentA = townyAPIClass.getMethod("getResident", java.util.UUID.class).invoke(townyAPI, a.getUniqueId());
+            Object residentB = townyAPIClass.getMethod("getResident", java.util.UUID.class).invoke(townyAPI, b.getUniqueId());
+            if (residentA == null || residentB == null) return false;
+
+            Class<?> residentClass = Class.forName("com.palmergames.bukkit.towny.object.Resident");
+
+            boolean aHasTown = (boolean) residentClass.getMethod("hasTown").invoke(residentA);
+            boolean bHasTown = (boolean) residentClass.getMethod("hasTown").invoke(residentB);
+            if (!aHasTown || !bHasTown) return false;
+
+            Object townA = residentClass.getMethod("getTownOrNull").invoke(residentA);
+            Object townB = residentClass.getMethod("getTownOrNull").invoke(residentB);
+            if (townA == null || townB == null) return false;
+
+            // Same town = teammates
+            if (townA.equals(townB)) return true;
+
+            Class<?> townClass = Class.forName("com.palmergames.bukkit.towny.object.Town");
+
+            boolean aHasNation = (boolean) townClass.getMethod("hasNation").invoke(townA);
+            boolean bHasNation = (boolean) townClass.getMethod("hasNation").invoke(townB);
+            if (!aHasNation || !bHasNation) return false;
+
+            Object nationA = townClass.getMethod("getNationOrNull").invoke(townA);
+            Object nationB = townClass.getMethod("getNationOrNull").invoke(townB);
+            if (nationA == null || nationB == null) return false;
+
+            // Same nation = teammates
+            if (nationA.equals(nationB)) return true;
+
+            // Allied nations = teammates
+            Class<?> nationClass = Class.forName("com.palmergames.bukkit.towny.object.Nation");
+            java.util.Collection<?> alliesA = (java.util.Collection<?>) nationClass.getMethod("getAllies").invoke(nationA);
+            return alliesA != null && alliesA.contains(nationB);
+
+        } catch (Exception ignored) {}
+
+        return false;
     }
 }
