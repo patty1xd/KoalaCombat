@@ -42,6 +42,9 @@ public class CombatListener implements Listener {
         // Don't tag teammates or allies
         if (areTeammates(attacker, victim)) return;
 
+        // Don't tag if victim is a protected civilian inside their own town territory
+        if (isCivilianInOwnTerritory(victim)) return;
+
         // Mace cooldown — check BEFORE tagging so first hit always lands
         // Then apply cooldown AFTER so subsequent hits are blocked
         ItemStack mainHand = attacker.getInventory().getItemInMainHand();
@@ -213,6 +216,68 @@ public class CombatListener implements Listener {
             int seconds = plugin.getConfig().getInt("cooldowns.totem.seconds", 10);
             player.setCooldown(Material.TOTEM_OF_UNDYING, seconds * 20);
         }
+    }
+
+    /**
+     * Returns true if the player is a protected civilian standing inside
+     * their own town's claimed territory.
+     *
+     * "Civilian" in Towny terms means the resident has NOT opted into PvP
+     * mode (i.e. they haven't done /res toggle pvp). If the Towny build
+     * exposes isProtected() we use that directly; otherwise we fall back
+     * to checking getPvpMode() — if pvp mode is OFF, they're a civilian.
+     */
+    private boolean isCivilianInOwnTerritory(Player player) {
+        try {
+            org.bukkit.plugin.Plugin townyPlugin = org.bukkit.Bukkit.getPluginManager().getPlugin("Towny");
+            if (townyPlugin == null) return false;
+
+            Class<?> townyAPIClass = Class.forName("com.palmergames.bukkit.towny.TownyAPI");
+            Object townyAPI = townyAPIClass.getMethod("getInstance").invoke(null);
+
+            // Resolve the resident profile
+            Object resident = townyAPIClass.getMethod("getResident", java.util.UUID.class)
+                .invoke(townyAPI, player.getUniqueId());
+            if (resident == null) return false;
+
+            Class<?> residentClass = Class.forName("com.palmergames.bukkit.towny.object.Resident");
+
+            // Must belong to a town
+            boolean hasTown = (boolean) residentClass.getMethod("hasTown").invoke(resident);
+            if (!hasTown) return false;
+
+            Object residentTown = residentClass.getMethod("getTownOrNull").invoke(resident);
+            if (residentTown == null) return false;
+
+            // Resolve the TownBlock (claimed chunk) the player is standing in
+            Object townBlock = townyAPIClass.getMethod("getTownBlock", org.bukkit.Location.class)
+                .invoke(townyAPI, player.getLocation());
+            if (townBlock == null) return false; // wilderness — no protection
+
+            // Get the town that owns this chunk
+            Class<?> townBlockClass = Class.forName("com.palmergames.bukkit.towny.object.TownBlock");
+            Object chunkTown = townBlockClass.getMethod("getTownOrNull").invoke(townBlock);
+            if (chunkTown == null) return false;
+
+            // Chunk must belong to the player's own town
+            if (!residentTown.equals(chunkTown)) return false;
+
+            // Determine civilian status — try isProtected() first
+            try {
+                return (boolean) residentClass.getMethod("isProtected").invoke(resident);
+            } catch (NoSuchMethodException ignored) {}
+
+            // Fallback: pvp mode ON means the player opted into fighting (soldier), not a civilian
+            try {
+                boolean pvpMode = (boolean) residentClass.getMethod("getPvpMode").invoke(resident);
+                return !pvpMode;
+            } catch (NoSuchMethodException ignored) {}
+
+            // If no pvp-mode method exists either, protect them by default
+            return true;
+
+        } catch (Exception ignored) {}
+        return false;
     }
 
     private boolean areTeammates(Player a, Player b) {
