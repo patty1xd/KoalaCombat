@@ -42,28 +42,20 @@ public class CombatListener implements Listener {
         // Don't tag teammates or allies
         if (areTeammates(attacker, victim)) return;
 
-        // Don't tag if victim is a protected civilian inside their own town territory
-        if (isCivilianInOwnTerritory(victim)) return;
-
-        // Mace cooldown — check BEFORE tagging so first hit always lands
-        // Then apply cooldown AFTER so subsequent hits are blocked
+        // Mace cooldown — applies on any hit, no combat requirement
         ItemStack mainHand = attacker.getInventory().getItemInMainHand();
-        if (mainHand.getType() == Material.MACE) {
+        if (mainHand.getType() == Material.MACE && plugin.getConfig().getBoolean("cooldowns.mace.enabled", true)) {
             if (plugin.getCooldownManager().isOnCooldown("mace", attacker.getUniqueId())) {
-                // Already on cooldown from a previous hit — block it
-                String msg = plugin.getConfig().getString("cooldowns.mace.message", "&cMace is on cooldown!")
+                String msg = plugin.getConfig().getString("cooldowns.mace.message", "&cMace is on cooldown for &f{time}s&c!")
                     .replace("{time}", String.valueOf(plugin.getCooldownManager().getRemainingSeconds("mace", attacker.getUniqueId())))
                     .replace("&", "§");
                 attacker.sendMessage(msg);
                 event.setCancelled(true);
                 return;
             }
-            // First or valid hit — let it through, then set cooldown
-            if (plugin.getConfig().getBoolean("cooldowns.mace.enabled", true)) {
-                plugin.getCooldownManager().setCooldown("mace", attacker.getUniqueId());
-                int seconds = plugin.getConfig().getInt("cooldowns.mace.seconds", 8);
-                attacker.setCooldown(Material.MACE, seconds * 20);
-            }
+            plugin.getCooldownManager().setCooldown("mace", attacker.getUniqueId());
+            int seconds = plugin.getConfig().getInt("cooldowns.mace.seconds", 8);
+            attacker.setCooldown(Material.MACE, seconds * 20);
         }
 
         // Tag both players
@@ -84,10 +76,12 @@ public class CombatListener implements Listener {
     }
 
     // Death ends BOTH players' combat
+    // Death ends BOTH players' combat
     @EventHandler
     public void onDeath(PlayerDeathEvent event) {
-        plugin.getCombatManager().handleDeath(event.getEntity().getUniqueId());
-        plugin.getCooldownManager().clearPlayer(event.getEntity().getUniqueId());
+        Player victim = event.getEntity();
+        plugin.getCombatManager().handleDeath(victim.getUniqueId());
+        plugin.getCooldownManager().clearPlayer(victim.getUniqueId());
     }
 
     // Blocklist approach — block specific commands, allow everything else
@@ -218,129 +212,61 @@ public class CombatListener implements Listener {
         }
     }
 
-    /**
-     * Returns true if the player is a protected civilian standing inside
-     * their own town's claimed territory.
-     *
-     * "Civilian" in Towny terms means the resident has NOT opted into PvP
-     * mode (i.e. they haven't done /res toggle pvp). If the Towny build
-     * exposes isProtected() we use that directly; otherwise we fall back
-     * to checking getPvpMode() — if pvp mode is OFF, they're a civilian.
-     */
-    private boolean isCivilianInOwnTerritory(Player player) {
-        try {
-            org.bukkit.plugin.Plugin townyPlugin = org.bukkit.Bukkit.getPluginManager().getPlugin("Towny");
-            if (townyPlugin == null) return false;
-
-            Class<?> townyAPIClass = Class.forName("com.palmergames.bukkit.towny.TownyAPI");
-            Object townyAPI = townyAPIClass.getMethod("getInstance").invoke(null);
-
-            // Resolve the resident profile
-            Object resident = townyAPIClass.getMethod("getResident", java.util.UUID.class)
-                .invoke(townyAPI, player.getUniqueId());
-            if (resident == null) return false;
-
-            Class<?> residentClass = Class.forName("com.palmergames.bukkit.towny.object.Resident");
-
-            // Must belong to a town
-            boolean hasTown = (boolean) residentClass.getMethod("hasTown").invoke(resident);
-            if (!hasTown) return false;
-
-            Object residentTown = residentClass.getMethod("getTownOrNull").invoke(resident);
-            if (residentTown == null) return false;
-
-            // Resolve the TownBlock (claimed chunk) the player is standing in
-            Object townBlock = townyAPIClass.getMethod("getTownBlock", org.bukkit.Location.class)
-                .invoke(townyAPI, player.getLocation());
-            if (townBlock == null) return false; // wilderness — no protection
-
-            // Get the town that owns this chunk
-            Class<?> townBlockClass = Class.forName("com.palmergames.bukkit.towny.object.TownBlock");
-            Object chunkTown = townBlockClass.getMethod("getTownOrNull").invoke(townBlock);
-            if (chunkTown == null) return false;
-
-            // Chunk must belong to the player's own town
-            if (!residentTown.equals(chunkTown)) return false;
-
-            // Determine civilian status — try isProtected() first
-            try {
-                return (boolean) residentClass.getMethod("isProtected").invoke(resident);
-            } catch (NoSuchMethodException ignored) {}
-
-            // Fallback: pvp mode ON means the player opted into fighting (soldier), not a civilian
-            try {
-                boolean pvpMode = (boolean) residentClass.getMethod("getPvpMode").invoke(resident);
-                return !pvpMode;
-            } catch (NoSuchMethodException ignored) {}
-
-            // If no pvp-mode method exists either, protect them by default
-            return true;
-
-        } catch (Exception ignored) {}
-        return false;
-    }
-
     private boolean areTeammates(Player a, Player b) {
-        // --- TeamsPlugin check ---
+        // TeamsPlugin check
         try {
             org.bukkit.plugin.Plugin teamsPlugin = org.bukkit.Bukkit.getPluginManager().getPlugin("TeamsPlugin");
+            if (teamsPlugin == null) teamsPlugin = org.bukkit.Bukkit.getPluginManager().getPlugin("KoalaTeams");
             if (teamsPlugin != null) {
                 Object teamManager = teamsPlugin.getClass().getMethod("getTeamManager").invoke(teamsPlugin);
                 Object teamA = teamManager.getClass().getMethod("getPlayerTeam", java.util.UUID.class).invoke(teamManager, a.getUniqueId());
                 Object teamB = teamManager.getClass().getMethod("getPlayerTeam", java.util.UUID.class).invoke(teamManager, b.getUniqueId());
                 if (teamA != null && teamB != null) {
                     if (teamA == teamB) return true;
-                    Boolean allied = (Boolean) teamManager.getClass()
-                        .getMethod("areAllies", teamA.getClass().getSuperclass(), teamB.getClass().getSuperclass())
-                        .invoke(teamManager, teamA, teamB);
-                    if (allied != null && allied) return true;
+                    try {
+                        Boolean allied = (Boolean) teamManager.getClass()
+                            .getMethod("areAllies", teamA.getClass().getSuperclass(), teamB.getClass().getSuperclass())
+                            .invoke(teamManager, teamA, teamB);
+                        if (allied != null && allied) return true;
+                    } catch (Exception ignored) {}
                 }
             }
         } catch (Exception ignored) {}
 
-        // --- Towny check ---
+        // Towny check — same town or nation with friendly fire off
         try {
-            org.bukkit.plugin.Plugin townyPlugin = org.bukkit.Bukkit.getPluginManager().getPlugin("Towny");
-            if (townyPlugin == null) return false;
+            org.bukkit.plugin.Plugin towny = org.bukkit.Bukkit.getPluginManager().getPlugin("Towny");
+            if (towny != null) {
+                Class<?> townyAPIClass = Class.forName("com.palmergames.bukkit.towny.TownyAPI");
+                Object townyAPI = townyAPIClass.getMethod("getInstance").invoke(null);
 
-            Class<?> townyAPIClass = Class.forName("com.palmergames.bukkit.towny.TownyAPI");
-            Object townyAPI = townyAPIClass.getMethod("getInstance").invoke(null);
+                Object residentA = townyAPIClass.getMethod("getResident", java.util.UUID.class).invoke(townyAPI, a.getUniqueId());
+                Object residentB = townyAPIClass.getMethod("getResident", java.util.UUID.class).invoke(townyAPI, b.getUniqueId());
+                if (residentA == null || residentB == null) return false;
 
-            Object residentA = townyAPIClass.getMethod("getResident", java.util.UUID.class).invoke(townyAPI, a.getUniqueId());
-            Object residentB = townyAPIClass.getMethod("getResident", java.util.UUID.class).invoke(townyAPI, b.getUniqueId());
-            if (residentA == null || residentB == null) return false;
+                // Check same town
+                Object townA = residentA.getClass().getMethod("getTownOrNull").invoke(residentA);
+                Object townB = residentB.getClass().getMethod("getTownOrNull").invoke(residentB);
+                if (townA != null && townB != null && townA.equals(townB)) {
+                    // Check if friendly fire is off in this town
+                    try {
+                        boolean pvp = (boolean) townA.getClass().getMethod("isPVP").invoke(townA);
+                        if (!pvp) return true;
+                    } catch (Exception e) {
+                        return true; // default to no combat if we can't check
+                    }
+                }
 
-            Class<?> residentClass = Class.forName("com.palmergames.bukkit.towny.object.Resident");
-
-            boolean aHasTown = (boolean) residentClass.getMethod("hasTown").invoke(residentA);
-            boolean bHasTown = (boolean) residentClass.getMethod("hasTown").invoke(residentB);
-            if (!aHasTown || !bHasTown) return false;
-
-            Object townA = residentClass.getMethod("getTownOrNull").invoke(residentA);
-            Object townB = residentClass.getMethod("getTownOrNull").invoke(residentB);
-            if (townA == null || townB == null) return false;
-
-            // Same town = teammates
-            if (townA.equals(townB)) return true;
-
-            Class<?> townClass = Class.forName("com.palmergames.bukkit.towny.object.Town");
-
-            boolean aHasNation = (boolean) townClass.getMethod("hasNation").invoke(townA);
-            boolean bHasNation = (boolean) townClass.getMethod("hasNation").invoke(townB);
-            if (!aHasNation || !bHasNation) return false;
-
-            Object nationA = townClass.getMethod("getNationOrNull").invoke(townA);
-            Object nationB = townClass.getMethod("getNationOrNull").invoke(townB);
-            if (nationA == null || nationB == null) return false;
-
-            // Same nation = teammates
-            if (nationA.equals(nationB)) return true;
-
-            // Allied nations = teammates
-            Class<?> nationClass = Class.forName("com.palmergames.bukkit.towny.object.Nation");
-            java.util.Collection<?> alliesA = (java.util.Collection<?>) nationClass.getMethod("getAllies").invoke(nationA);
-            return alliesA != null && alliesA.contains(nationB);
-
+                // Check same nation
+                try {
+                    Object nationA = residentA.getClass().getMethod("getNationOrNull").invoke(residentA);
+                    Object nationB = residentB.getClass().getMethod("getNationOrNull").invoke(residentB);
+                    if (nationA != null && nationB != null && nationA.equals(nationB)) {
+                        boolean pvp = (boolean) nationA.getClass().getMethod("isPVP").invoke(nationA);
+                        if (!pvp) return true;
+                    }
+                } catch (Exception ignored) {}
+            }
         } catch (Exception ignored) {}
 
         return false;
