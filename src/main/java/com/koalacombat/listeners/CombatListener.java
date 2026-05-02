@@ -78,11 +78,19 @@ public class CombatListener implements Listener {
     // Death ends BOTH players' combat
     // Death ends BOTH players' combat
     @EventHandler
-    public void onDeath(PlayerDeathEvent event) {
-        Player victim = event.getEntity();
-        plugin.getCombatManager().handleDeath(victim.getUniqueId());
-        plugin.getCooldownManager().clearPlayer(victim.getUniqueId());
+public void onDeath(PlayerDeathEvent event) {
+    Player victim = event.getEntity();
+    Player killer = victim.getKiller();
+
+    // End victim's combat
+    plugin.getCombatManager().handleDeath(victim.getUniqueId());
+    plugin.getCooldownManager().clearPlayer(victim.getUniqueId());
+
+    // End killer's combat too — they made the kill
+    if (killer != null && killer != victim) {
+        plugin.getCombatManager().endCombat(killer.getUniqueId(), true);
     }
+}
 
     // Blocklist approach — block specific commands, allow everything else
     @EventHandler(priority = EventPriority.HIGHEST)
