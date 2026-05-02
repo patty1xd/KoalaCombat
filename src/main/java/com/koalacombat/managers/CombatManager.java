@@ -81,22 +81,23 @@ public class CombatManager {
      * If an opponent has no other combat targets left, their combat ends too.
      */
     public void handleDeath(UUID deadPlayer) {
-    endCombat(deadPlayer, false);
+        endCombat(deadPlayer, false);
 
-    Set<UUID> opponents = combatOpponents.remove(deadPlayer);
-    if (opponents == null) return;
+        Set<UUID> opponents = combatOpponents.remove(deadPlayer);
+        if (opponents == null) return;
 
-    for (UUID opponentUUID : opponents) {
-        // End combat for anyone who was fighting the dead player
-        endCombat(opponentUUID, true);
-        
-        // Remove dead player from opponent's target list
-        Set<UUID> opponentTargets = combatOpponents.get(opponentUUID);
-        if (opponentTargets != null) {
-            opponentTargets.remove(deadPlayer);
+        for (UUID opponentUUID : opponents) {
+            // Remove dead player from opponent's target list
+            Set<UUID> opponentTargets = combatOpponents.get(opponentUUID);
+            if (opponentTargets != null) {
+                opponentTargets.remove(deadPlayer);
+                // If opponent has no remaining targets, end their combat
+                if (opponentTargets.isEmpty()) {
+                    endCombat(opponentUUID, true);
+                }
+            }
         }
     }
-}
 
     public void markKicked(UUID uuid) { kickedPlayers.add(uuid); }
     public boolean isKicked(UUID uuid) { return kickedPlayers.contains(uuid); }
