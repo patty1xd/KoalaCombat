@@ -12,8 +12,8 @@ public class CombatManager {
     private final KoalaCombat plugin;
     private final Map<UUID, Long> combatExpiry = new HashMap<>();
     private final Map<UUID, Integer> actionBarTasks = new HashMap<>();
-    // Track who is fighting who so we can end both combats on death
-    private final Map<UUID, UUID> combatOpponent = new HashMap<>();
+    // Track ALL opponents per player (not just last one)
+    private final Map<UUID, Set<UUID>> combatOpponents = new HashMap<>();
     private final Set<UUID> kickedPlayers = new HashSet<>();
 
     public CombatManager(KoalaCombat plugin) {
@@ -39,9 +39,9 @@ public class CombatManager {
     public void tagPlayers(Player attacker, Player victim) {
         tagPlayer(attacker);
         tagPlayer(victim);
-        // Track opponents
-        combatOpponent.put(attacker.getUniqueId(), victim.getUniqueId());
-        combatOpponent.put(victim.getUniqueId(), attacker.getUniqueId());
+        // Track both as opponents of each other
+        combatOpponents.computeIfAbsent(attacker.getUniqueId(), k -> new HashSet<>()).add(victim.getUniqueId());
+        combatOpponents.computeIfAbsent(victim.getUniqueId(), k -> new HashSet<>()).add(attacker.getUniqueId());
     }
 
     public void tagPlayer(Player player) {
@@ -63,7 +63,7 @@ public class CombatManager {
     public void endCombat(UUID uuid, boolean natural) {
         combatExpiry.remove(uuid);
         stopActionBar(uuid);
-        combatOpponent.remove(uuid);
+        combatOpponents.remove(uuid);
 
         if (natural) {
             Player player = Bukkit.getPlayer(uuid);
@@ -76,15 +76,26 @@ public class CombatManager {
         }
     }
 
-    // Called when a player dies — also ends their opponent's combat
+    /**
+     * Called when a player dies — ends their combat AND checks all opponents.
+     * If an opponent has no other combat targets left, their combat ends too.
+     */
     public void handleDeath(UUID deadPlayer) {
-        // End the dead player's combat
         endCombat(deadPlayer, false);
 
-        // End the opponent's combat too
-        UUID opponent = combatOpponent.get(deadPlayer);
-        if (opponent != null) {
-            endCombat(opponent, true);
+        Set<UUID> opponents = combatOpponents.remove(deadPlayer);
+        if (opponents == null) return;
+
+        for (UUID opponentUUID : opponents) {
+            // Remove dead player from opponent's target list
+            Set<UUID> opponentTargets = combatOpponents.get(opponentUUID);
+            if (opponentTargets != null) {
+                opponentTargets.remove(deadPlayer);
+                // If opponent has no remaining targets, end their combat
+                if (opponentTargets.isEmpty()) {
+                    endCombat(opponentUUID, true);
+                }
+            }
         }
     }
 
@@ -99,20 +110,27 @@ public class CombatManager {
             endCombat(player.getUniqueId(), false);
             return;
         }
+
         String broadcast = plugin.getConfig().getString("combatlog-broadcast",
             "&c{player} &7tried to escape combat and &cdied!")
             .replace("{player}", player.getName())
             .replace("&", "§");
         Bukkit.broadcastMessage(broadcast);
 
-        // End opponent's combat too
-        UUID opponent = combatOpponent.get(player.getUniqueId());
+        // End all opponents' combat since this player is gone
+        Set<UUID> opponents = combatOpponents.get(player.getUniqueId());
         combatExpiry.remove(player.getUniqueId());
         stopActionBar(player.getUniqueId());
-        combatOpponent.remove(player.getUniqueId());
+        combatOpponents.remove(player.getUniqueId());
 
-        if (opponent != null) {
-            endCombat(opponent, true);
+        if (opponents != null) {
+            for (UUID opponentUUID : opponents) {
+                Set<UUID> opponentTargets = combatOpponents.get(opponentUUID);
+                if (opponentTargets != null) {
+                    opponentTargets.remove(player.getUniqueId());
+                    if (opponentTargets.isEmpty()) endCombat(opponentUUID, true);
+                }
+            }
         }
 
         player.setHealth(0);
@@ -140,5 +158,6 @@ public class CombatManager {
     public void cleanup() {
         for (UUID uuid : new HashSet<>(combatExpiry.keySet())) stopActionBar(uuid);
         combatExpiry.clear();
+        combatOpponents.clear();
     }
 }
